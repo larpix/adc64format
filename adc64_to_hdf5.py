@@ -128,7 +128,9 @@ with open(input_file, 'rb') as fi:
                         data[i]['size'] = np.frombuffer(fi.read(3)+b'\x00', dtype='u4') >> 2
                         data[i]['channel'] = np.frombuffer(fi.read(1), dtype='u1')
                         fi.seek(8,1)
-                        data[i]['voltage'] = np.frombuffer(fi.read(2*nsamples), dtype='i2')
+                        wvfm = np.frombuffer(fi.read(2*nsamples), dtype='i2')
+                        data[i]['voltage'][::2] = wvfm[1::2]
+                        data[i]['voltage'][1::2] = wvfm[::2]
                     ptr['data'] += nblocks
 
                     # create index

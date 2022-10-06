@@ -28,10 +28,13 @@ import numpy as np
 import h5py
 import sys
 import tqdm
+from collections import defaultdict
 
 nsamples = int(sys.argv[-3])
 input_file = sys.argv[-2]
 output_file = sys.argv[-1]
+
+WRITE_BUFFER = 10240
 
 # datasets:
 #  - time header
@@ -47,14 +50,14 @@ data_dtype = np.dtype([('channel','u1'), ('size','u4'), ('voltage','i2',(nsample
 ref_dtype = np.dtype([('start','i4'), ('stop','i4')])
 
 
-print(f'Opening input file {input_file}...', end='')
+print(f'Opening input file {input_file}...', end=' ')
 with open(input_file, 'rb') as fi:
 
     nbytes = fi.seek(0,2)
     fi.seek(0)
     print(f'{nbytes//1024//1024}MB!')
 
-    print(f'Creating new file at {output_file}...', end='')
+    print(f'Creating new file at {output_file}...', end=' ')
     with h5py.File(output_file, 'w') as fo:
 
         fo.create_dataset('header', (0,), maxshape=(None,), dtype=header_dtype, compression='gzip', shuffle=True)
@@ -65,96 +68,102 @@ with open(input_file, 'rb') as fi:
         fo.create_dataset('ref', (0,), maxshape=(None,), dtype=ref_dtype, compression='gzip', shuffle=True)
         dset_keys = list(fo.keys())
 
-        ptr = dict()
-        for key in dset_keys:
-            ptr[key] = 0
+        ptr = defaultdict(int)
+        data = defaultdict(list)
+        print('datasets: ' + ', '.join(dset_keys) + '...', end=' ')
 
         print('Done!')
 
-        with tqdm.tqdm(total=nbytes, unit='MB', unit_scale=1/1024/1024, smoothing=0) as pbar:
+        with tqdm.tqdm(total=nbytes, unit='B', smoothing=0) as pbar:
 
             while True:
                     here = fi.seek(0,1)
-                    if here >= nbytes:
-                        break
-                    
-                    # read time header
-                    header_data = np.zeros((1,), dtype=header_dtype)
-                    time_header = np.frombuffer(fi.read(8), dtype='u4')
-                    unix_timestamp = np.frombuffer(fi.read(8), dtype='u8')
-                    header_data['header'] = time_header[0]
-                    header_data['size'] = time_header[1]
-                    header_data['unix'] = unix_timestamp
-                    ptr['header'] += 1
+                    if here < nbytes:
+                        # read time header
+                        data['header'].append(np.zeros((1,), dtype=header_dtype))
+                        time_header = np.frombuffer(fi.read(8), dtype='u4')
+                        unix_timestamp = np.frombuffer(fi.read(8), dtype='u8')
+                        data['header'][-1]['header'] = time_header[0]
+                        data['header'][-1]['size'] = time_header[1]
+                        data['header'][-1]['unix'] = unix_timestamp
+                        ptr['header'] += 1
 
-                    # read event payload
-                    event_data = np.zeros((1,), dtype=event_dtype)
-                    event_payload = np.frombuffer(fi.read(12), dtype='u4')
-                    event_data['event'] = event_payload[0]
-                    event_data['size'] = event_payload[1]
-                    event_data['serial'] = event_payload[2]
-                    ptr['event'] += 1
-                    assert hex(int(event_data['event'])) == '0x2a502a50', f'Bad event word ({hex(int(event_data["event"]))}), file corrupted or invalid sample specification'
+                        # read event payload
+                        data['event'].append(np.zeros((1,), dtype=event_dtype))
+                        event_payload = np.frombuffer(fi.read(12), dtype='u4')
+                        data['event'][-1]['event'] = event_payload[0]
+                        data['event'][-1]['size'] = event_payload[1]
+                        data['event'][-1]['serial'] = event_payload[2]
+                        ptr['event'] += 1
+                        assert hex(int(data['event'][-1]['event'])) == '0x2a502a50', f'Bad event word ({hex(int(data["event"][-1]["event"]))}), file corrupted or invalid sample specification, first data: {data["data"][0]["size"]}'
 
-                    # read device payload
-                    device_data = np.zeros((1,), dtype=device_dtype)
-                    device_serial_number = np.frombuffer(fi.read(4), dtype='u4')
-                    device_payload_size = np.frombuffer(fi.read(3)+b'\x00', dtype='u4')
-                    device_id = np.frombuffer(fi.read(1), dtype='u1')
-                    device_data['serial'] = device_serial_number
-                    device_data['id'] = device_id
-                    device_data['size'] = device_payload_size
-                    ptr['device'] += 1
+                        # read device payload
+                        data['device'].append(np.zeros((1,), dtype=device_dtype))
+                        device_serial_number = np.frombuffer(fi.read(4), dtype='u4')
+                        device_payload_size = np.frombuffer(fi.read(3)+b'\x00', dtype='u4')
+                        device_id = np.frombuffer(fi.read(1), dtype='u1')
+                        data['device'][-1]['serial'] = device_serial_number
+                        data['device'][-1]['id'] = device_id
+                        data['device'][-1]['size'] = device_payload_size
+                        ptr['device'] += 1
 
-                    # read time block
-                    time_data = np.zeros((1,), dtype=time_dtype)
-                    time_payload_size = np.frombuffer(fi.read(4), dtype='u4') >> 2
-                    event_tai_s = np.frombuffer(fi.read(4), dtype='u4')
-                    event_tai_ns = np.frombuffer(fi.read(4), dtype='u4')
-                    event_time_flag = event_tai_ns % 4
-                    event_tai_ns = event_tai_ns >> 2
-                    bit_mask = np.frombuffer(fi.read(8), dtype='u8')
-                    time_data['size'] = time_payload_size
-                    time_data['tai_s'] = event_tai_s
-                    time_data['tai_ns'] = event_tai_ns
-                    time_data['flag'] = event_time_flag
-                    time_data['bit_mask'] = bit_mask
-                    ptr['time'] += 1
+                        # read time block
+                        data['time'].append(np.zeros((1,), dtype=time_dtype))
+                        time_payload_size = np.frombuffer(fi.read(4), dtype='u4') >> 2
+                        event_tai_s = np.frombuffer(fi.read(4), dtype='u4')
+                        event_tai_ns = np.frombuffer(fi.read(4), dtype='u4')
+                        event_time_flag = event_tai_ns % 4
+                        event_tai_ns = event_tai_ns >> 2
+                        bit_mask = np.frombuffer(fi.read(8), dtype='u8')
+                        data['time'][-1]['size'] = time_payload_size
+                        data['time'][-1]['tai_s'] = event_tai_s
+                        data['time'][-1]['tai_ns'] = event_tai_ns
+                        data['time'][-1]['flag'] = event_time_flag
+                        data['time'][-1]['bit_mask'] = bit_mask
+                        ptr['time'] += 1
 
-                    # read data blocks
-                    nblocks = bin(int(bit_mask)).count('1')
-                    data = np.zeros(nblocks, dtype=data_dtype)
-                    for i in range(nblocks):
-                        data[i]['size'] = np.frombuffer(fi.read(3)+b'\x00', dtype='u4') >> 2
-                        data[i]['channel'] = np.frombuffer(fi.read(1), dtype='u1')
-                        fi.seek(8,1)
-                        wvfm = np.frombuffer(fi.read(2*nsamples), dtype='i2')
-                        data[i]['voltage'][::2] = wvfm[1::2]
-                        data[i]['voltage'][1::2] = wvfm[::2]
-                    ptr['data'] += nblocks
+                        # read data blocks
+                        nblocks = bin(int(bit_mask)).count('1')
+                        data['data'].append(np.zeros(nblocks, dtype=data_dtype))
+                        for i in range(nblocks):
+                            data['data'][-1][i]['size'] = np.frombuffer(fi.read(3)+b'\x00', dtype='u4') >> 2
+                            data['data'][-1][i]['channel'] = np.frombuffer(fi.read(1), dtype='u1')
+                            fi.seek(8,1)
+                            wvfm = np.frombuffer(fi.read(2*nsamples), dtype='i2')
+                            data['data'][-1][i]['voltage'][::2] = wvfm[1::2]
+                            data['data'][-1][i]['voltage'][1::2] = wvfm[::2]
+                            ptr['data'] += nblocks
+                            
+                        # create index
+                        data['ref'].append(np.zeros((1,), dtype=ref_dtype))
+                        data['ref'][-1]['stop'] = ptr['data']
+                        data['ref'][-1]['start'] = ptr['data'] - len(data['data'])
+                        ptr['ref'] += 1
 
-                    # create index
-                    ref_data = np.zeros((1,), dtype=ref_dtype)
-                    ref_data['stop'] = ptr['data']
-                    ref_data['start'] = ptr['data'] - len(data)
-                    ptr['ref'] += 1
-
-                    # write to hdf5 file
+                    # extend hdf5 file as needed
                     for key in dset_keys:
                         if len(fo[key]) <= ptr[key]:
                             fo[key].resize((2*ptr[key],))
 
-                    fo['header'].write_direct(header_data, dest_sel=np.s_[ptr['header']-len(header_data):ptr['header']])
-                    fo['event'].write_direct(event_data, dest_sel=np.s_[ptr['event']-len(event_data):ptr['event']])
-                    fo['device'].write_direct(device_data, dest_sel=np.s_[ptr['device']-len(device_data):ptr['device']])
-                    fo['time'].write_direct(time_data, dest_sel=np.s_[ptr['time']-len(time_data):ptr['time']])
-                    fo['data'].write_direct(data, dest_sel=np.s_[ptr['data']-len(data):ptr['data']])
-                    fo['ref'].write_direct(ref_data, dest_sel=np.s_[ptr['ref']-len(ref_data):ptr['ref']])
+                    # write data
+                    for key in dset_keys:
+                        if (len(data[key]) > WRITE_BUFFER or here >= nbytes) and (len(data[key]) > 0):
+                            write_ptr = ptr[key]
+                            write_data = np.concatenate(data[key])
+
+                            #fo[key].write_direct(write_data, dest_sel=np.s_[write_ptr-len(write_data):write_ptr])
+                            fo[key][write_ptr-len(write_data):write_ptr] = write_data
+
+                            data[key] = list()
 
                     pbar.update(fi.seek(0,1)-here)
 
+                    if here >= nbytes:
+                        break
+
         for key in dset_keys:
             fo[key].resize((ptr[key],))
-            print(f'"{key}" final shape of {ptr[key]}')              
+            print(f'"{key}" final shape of {ptr[key]}')
 
 print('Conversion complete!')
+

@@ -151,8 +151,7 @@ with open(input_file, 'rb') as fi:
                             write_ptr = ptr[key]
                             write_data = np.concatenate(data[key])
 
-                            #fo[key].write_direct(write_data, dest_sel=np.s_[write_ptr-len(write_data):write_ptr])
-                            fo[key][write_ptr-len(write_data):write_ptr] = write_data
+                            fo[key].write_direct(write_data, dest_sel=np.s_[write_ptr-len(write_data):write_ptr])
 
                             data[key] = list()
 

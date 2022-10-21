@@ -34,7 +34,7 @@ nsamples = int(sys.argv[-3])
 input_file = sys.argv[-2]
 output_file = sys.argv[-1]
 
-WRITE_BUFFER = 10240
+WRITE_BUFFER = 10240-1
 
 # datasets:
 #  - time header
@@ -132,12 +132,12 @@ with open(input_file, 'rb') as fi:
                             wvfm = np.frombuffer(fi.read(2*nsamples), dtype='i2')
                             data['data'][-1][i]['voltage'][::2] = wvfm[1::2]
                             data['data'][-1][i]['voltage'][1::2] = wvfm[::2]
-                            ptr['data'] += nblocks
-                            
+                        ptr['data'] += nblocks
+
                         # create index
                         data['ref'].append(np.zeros((1,), dtype=ref_dtype))
                         data['ref'][-1]['stop'] = ptr['data']
-                        data['ref'][-1]['start'] = ptr['data'] - len(data['data'])
+                        data['ref'][-1]['start'] = ptr['data'] - len(data['data'][-1])
                         ptr['ref'] += 1
 
                     # extend hdf5 file as needed
@@ -146,14 +146,16 @@ with open(input_file, 'rb') as fi:
                             fo[key].resize((2*ptr[key],))
 
                     # write data
-                    for key in dset_keys:
-                        if (len(data[key]) > WRITE_BUFFER or here >= nbytes) and (len(data[key]) > 0):
-                            write_ptr = ptr[key]
-                            write_data = np.concatenate(data[key])
+                    if any([(len(data[key]) > WRITE_BUFFER or here >= nbytes) for key in dset_keys]):
+                        for key in dset_keys:
+                            if (len(data[key]) > 0):
+                                write_ptr = ptr[key]
+                                write_data = np.concatenate(data[key], axis=0)
 
-                            fo[key].write_direct(write_data, dest_sel=np.s_[write_ptr-len(write_data):write_ptr])
+                                print(key, 'write', write_data.shape, 'to', write_ptr)
+                                fo[key].write_direct(write_data, dest_sel=np.s_[write_ptr-len(write_data):write_ptr])
 
-                            data[key] = list()
+                                data[key] = list()
 
                     pbar.update(fi.seek(0,1)-here)
 

@@ -4,7 +4,7 @@
 name: Upload to PyPI (test)
 
 on:
-push:
+  push:
     branches: [ main ]
     tags: [ '*' ]
   pull_request:

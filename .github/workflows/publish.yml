@@ -27,10 +27,6 @@ jobs:
         TWINE_USERNAME: ${{ secrets.PYPI_API_USERNAME }}
         TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
       run: |
-        # Fake a version number so that we can always upload to test-pypi
-        date +%Y%m%d.%H%M%S > VERSION
-        cat VERSION
-        
         python -m build -w -s
         python -m twine upload dist/*
 

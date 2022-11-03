@@ -27,9 +27,7 @@ def test_skip_file(example_file):
 
         # skip some events
         nskip = 300
-        nsamples = 256
-        nchannels = 58
-        reader.skip(nskip, nsamples, nchannels)
+        reader.skip(nskip)
 
         # check new event against old
         event = reader.next()
@@ -46,9 +44,7 @@ def test_skip_multi_file(example_files):
 
         # skip some events
         nskip = 300
-        nsamples = 256
-        nchannels = 58
-        reader.skip(nskip, nsamples, nchannels)
+        reader.skip(nskip)
 
         # check new event against old
         event = []

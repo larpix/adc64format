@@ -126,6 +126,26 @@ def parse_chunk(f):
     return chunk
 
 
+def skip_chunks(f, nchunks):
+    ''' Skip either N chunks or to a specific position, assuming all chunks have the same number of channels and number of samples '''
+    if nchunks == 0:
+        return
+    elif nchunks < 0:
+        raise ValueError(f'nchunks ({nchunks}) must be greater than zero')
+    test_chunk = parse_chunk(f)
+    nchannels, nsamples = test_chunk['data']['voltage'].shape
+
+    nbytes = (nchunks-1) * (
+        16  # header
+        + 12  # event payload
+        + 8  # device
+        + 20  # time
+        + (4+8+2*nsamples)*nchannels  # data
+    )
+
+    f.seek(nbytes, 1)
+
+
 class ADC64Reader(object):
     '''
     Class to help read the raw ADC64 format into numpy arrays, to use::
@@ -197,20 +217,13 @@ class ADC64Reader(object):
                 self._fs[i].close()
             self._fs = list()
 
-    def skip(self, nchunks, nsamples, nchannels):
+    def skip(self, nchunks):
         ''' Skips forward in each file by a specified number of chunks assuming a constant number of samples and readout channels '''
         assert len(self._fs), 'File(s) have not been opened yet!'
 
-        nbytes = (
-            16  # header
-            + 12  # event payload
-            + 8  # device
-            + 20  # time
-            + (4+8+2*nsamples)*nchannels  # data
-            ) * nchunks
-
         for f in self._fs:
-            f.seek(nbytes, 1)
+            skip_chunks(f, nchunks)
+
 
     def next(self, n=1):
         # initialize return value list

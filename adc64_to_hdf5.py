@@ -31,7 +31,7 @@ import sys
 import tqdm
 from collections import defaultdict
 
-from adc64format import ADC64Reader
+from adc64format import ADC64Reader, dtypes
 
 nsamples = int(sys.argv[-3])
 input_file = sys.argv[-2]
@@ -39,7 +39,7 @@ output_file = sys.argv[-1]
 
 WRITE_BUFFER = 1024-1
 
-dtypes = ADC64Reader.dtypes.copy()
+dtypes = dtypes.copy()
 dtypes['data'] = dtypes['data'](nsamples)
 dtypes['ref'] = np.dtype([('start','i4'), ('stop','i4')])
 

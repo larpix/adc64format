@@ -3,18 +3,19 @@ from collections import defaultdict
 
 #: Key and array data types returned in each iteration
 dtypes = dict(
-    header=np.dtype([('header','u4'), ('size','u4'), ('unix','u8')]),
-    event=np.dtype([('event','u4'), ('size','u4'), ('serial','u4')]),
-    device=np.dtype([('serial','u4'), ('id','u1'), ('size','u4')]),
-    time=np.dtype([('size','u4'), ('tai_s','u4'), ('tai_ns','u4'), ('flag','u1'), ('bit_mask','u8')]),
-    data=lambda nsamples : np.dtype([('channel','u1'), ('size','u4'), ('voltage','i2',(nsamples,))]),
+    header=np.dtype([('header', 'u4'), ('size', 'u4'), ('unix', 'u8')]),
+    event=np.dtype([('event', 'u4'), ('size', 'u4'), ('serial', 'u4')]),
+    device=np.dtype([('serial', 'u4'), ('id', 'u1'), ('size', 'u4')]),
+    time=np.dtype([('size', 'u4'), ('tai_s', 'u4'), ('tai_ns', 'u4'), ('flag', 'u1'), ('bit_mask', 'u8')]),
+    data=lambda nsamples: np.dtype([('channel', 'u1'), ('size', 'u4'), ('voltage', 'i2', (nsamples,))]),
 )
+
 
 def parse_header(f):
     ''' Reads next block as a "header" block and advances file pointers'''
     time_header = np.frombuffer(f.read(8), dtype='u4')
     unix_timestamp = np.frombuffer(f.read(8), dtype='u8')
-        
+
     arr = np.zeros((1,), dtype=dtypes['header'])
     arr['header'] = time_header[0]
     arr['size'] = time_header[1]
@@ -22,10 +23,11 @@ def parse_header(f):
 
     return arr
 
+
 def parse_event(f):
     ''' Reads next block as an "event" block '''
     event_payload = np.frombuffer(f.read(12), dtype='u4')
-        
+
     arr = np.zeros((1,), dtype=dtypes['event'])
     arr['event'] = event_payload[0]
     arr['size'] = event_payload[1]
@@ -35,6 +37,7 @@ def parse_event(f):
     assert hex(int(arr['event'])) == '0x2a502a50', f'Bad event word ({hex(int(arr["event"]))}), file corrupted?'
 
     return arr
+
 
 def parse_device(f):
     ''' Reads next block as a "device" block '''
@@ -49,6 +52,7 @@ def parse_device(f):
 
     return arr
 
+
 def parse_data(f, n=1):
     ''' Reads next block(s) as a "data" blocks '''
     arr_list = list()
@@ -56,15 +60,15 @@ def parse_data(f, n=1):
     while i < n:
         size = np.frombuffer(f.read(3)+b'\x00', dtype='u4') >> 2
         channel = np.frombuffer(f.read(1), dtype='u1')
-        f.seek(8,1)
-        nsamples = int(2*(size-2))
-        wvfm = np.frombuffer(f.read(2*nsamples), dtype='i2')
+        f.seek(8, 1)
+        nsamples = int(2 * (size - 2))
+        wvfm = np.frombuffer(f.read(2 * nsamples), dtype='i2')
 
         arr = np.zeros((1,), dtype=dtypes['data'](nsamples))
         arr['size'] = size
         arr['channel'] = channel
-        arr['voltage'][0,::2] = wvfm[1::2]
-        arr['voltage'][0,1::2] = wvfm[::2]
+        arr['voltage'][0, 0::2] = wvfm[1::2]
+        arr['voltage'][0, 1::2] = wvfm[0::2]
 
         arr_list.append(arr)
         i += 1
@@ -72,6 +76,7 @@ def parse_data(f, n=1):
     arr = np.concatenate(arr_list)
 
     return arr
+
 
 def parse_time(f):
     ''' Reads next block as a "time" block '''
@@ -90,6 +95,7 @@ def parse_time(f):
     arr['bit_mask'] = bit_mask
 
     return arr
+
 
 def parse_chunk(f):
     ''' Read next ADC64 chunk into numpy arrays and advance file pointers '''
@@ -110,13 +116,13 @@ def parse_chunk(f):
     data = parse_data(f, n=nblocks)
 
     # add to next chunk data
-    chunk = dict()        
+    chunk = dict()
     chunk['header'] = header
     chunk['event'] = event_payload
     chunk['device'] = device_payload
     chunk['time'] = time
     chunk['data'] = data
-        
+
     return chunk
 
 
@@ -145,7 +151,7 @@ class ADC64Reader(object):
             while (data := reader.next(batch_size)) is not None:
                 # do stuff with data
                 pass
-    
+
     In this case, each iteration will return a list of dicts, one per file.
     Missing events will be represented in the dicts with a length 0 array.
 
@@ -154,23 +160,23 @@ class ADC64Reader(object):
     #: Use this channel and threshold to synchronize multiple files
     SYNC_CHANNEL = 32
     SYNC_THRESHOLD = 1024
-    
+
     #: allow events as long as they are synchronized to within this value
-    UNIX_WINDOW = 100 # ms
-    TAI_NS_WINDOW = 1000 # ticks
+    UNIX_WINDOW = 100  # ms
+    TAI_NS_WINDOW = 1000  # ticks
 
     #: flag to dump *all* data to terminal
     VERBOSE = False
 
     def __init__(self, *filenames):
         assert len(filenames) >= 1, 'At least one filename is needed'
-        
+
         self.filenames = filenames
         self.chunk = 0
         self._fs = list()
         self._nbytes = list()
         self._next_event = [None] * len(self.filenames)
-        self._last_sync = [np.zeros((1,), dtype=dtypes['time'][['tai_s','tai_ns']])] * len(self.filenames)
+        self._last_sync = [np.zeros((1,), dtype=dtypes['time'][['tai_s', 'tai_ns']])] * len(self.filenames)
 
         if self.VERBOSE:
             print('Will load data from:', self.filenames)
@@ -178,11 +184,11 @@ class ADC64Reader(object):
     def open(self):
         for file_ in self.filenames:
             self._fs.append(open(file_, 'rb'))
-            self._nbytes.append(self._fs[-1].seek(0,2))
+            self._nbytes.append(self._fs[-1].seek(0, 2))
             self._fs[-1].seek(0)
             if self.VERBOSE:
-                print('File',file_,'opened and contains',self._nbytes[-1],'B')
-                
+                print('File', file_, 'opened and contains', self._nbytes[-1], 'B')
+
         return self
 
     def close(self):
@@ -196,15 +202,15 @@ class ADC64Reader(object):
         assert len(self._fs), 'File(s) have not been opened yet!'
 
         nbytes = (
-            16 # header
-            + 12 # event payload
-            + 8 # device
-            + 20 # time
-            + (4+8+2*nsamples)*nchannels # data
+            16  # header
+            + 12  # event payload
+            + 8  # device
+            + 20  # time
+            + (4+8+2*nsamples)*nchannels  # data
             ) * nchunks
-        
+
         for f in self._fs:
-            f.seek(nbytes,1)
+            f.seek(nbytes, 1)
 
     def next(self, n=1):
         # initialize return value list
@@ -216,14 +222,14 @@ class ADC64Reader(object):
 
         while True:
             # loop over files
-            for i,(f, nbytes) in enumerate(zip(self._fs, self._nbytes)):
+            for i, (f, nbytes) in enumerate(zip(self._fs, self._nbytes)):
                 # check for end of file
-                if eof[i] or (f.seek(0,1) >= nbytes):
+                if eof[i] or (f.seek(0, 1) >= nbytes):
                     if self.VERBOSE:
                         print(f'*** EOF ({i}) ***')
                     eof[i] = True
                     continue
-                
+
                 # check if chunk has already been loaded
                 if self._next_event[i] is not None:
                     if self.VERBOSE:
@@ -250,25 +256,25 @@ class ADC64Reader(object):
                 print(f'Chunk {self.chunk} matching on timestamp:', event_unix, event_tai_ns)
 
             # Move events from next to return data
-            for i,ev in enumerate(self._next_event):
+            for i, ev in enumerate(self._next_event):
                 if (
                         ev is not None
                         and (abs(event_unix - ev['header']['unix'].astype(int)) < self.UNIX_WINDOW)
-                        and (abs(event_tai_ns - ev['time']['tai_ns'].astype(int)) < self.TAI_NS_WINDOW)):                        
+                        and (abs(event_tai_ns - ev['time']['tai_ns'].astype(int)) < self.TAI_NS_WINDOW)):
                     for key in dtypes:
                         return_value[i][key].append(ev[key])
                     self._next_event[i] = None
                 else:
                     for key in dtypes:
                         return_value[i][key].append(None)
-                            
+
             if self.VERBOSE:
-                print(f'Matched on files:',[i for i in range(len(self._next_event)) if return_value[i]['header'][-1] is not None])
+                print('Matched on files:', [i for i in range(len(self._next_event)) if return_value[i]['header'][-1] is not None])
 
             self.chunk += 1
             if (self.chunk == stop_chunk) or all(eof):
                 break
-            
+
         # check for EOF across all files
         if all(eof) and all([header is None for rv in return_value for header in rv['header']]):
             return None
@@ -287,16 +293,16 @@ class ADC64Reader(object):
 
     def _apply_sync(self, ifile, event):
         is_sync = self._check_sync(event['data'])
-        
+
         if is_sync:
-            self._last_sync[ifile] = event['time'][['tai_s','tai_ns']].copy()
+            self._last_sync[ifile] = event['time'][['tai_s', 'tai_ns']].copy()
             event['time']['tai_s'] = 0
             event['time']['tai_ns'] = 0
         else:
             event['time']['tai_s'] = (
                 event['time']['tai_s'] - self._last_sync[ifile]['tai_s']
                 if event['time']['tai_ns'] > self._last_sync[ifile]['tai_ns']
-                else (event['time']['tai_s']-1) - self._last_sync[ifile]['tai_s']) 
+                else (event['time']['tai_s']-1) - self._last_sync[ifile]['tai_s'])
             event['time']['tai_ns'] = (
                 event['time']['tai_ns'] - self._last_sync[ifile]['tai_ns']
                 if event['time']['tai_ns'] > self._last_sync[ifile]['tai_ns']

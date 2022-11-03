@@ -8,9 +8,10 @@ from adc64format import dtypes
 try:
     import h5py
 except Exception as e:
-    warn_msg = 'could not load h5py, skipping script testing'
+    warn_msg = f'could not load h5py ({e}), skipping script testing'
     warnings.warn(warn_msg)
     pytest.skip(warn_msg, allow_module_level=True)
+
 
 @pytest.fixture
 def hdf5_example_file(example_file, tmp_path):
@@ -20,6 +21,7 @@ def hdf5_example_file(example_file, tmp_path):
     subprocess.run(command.split())
 
     return output_filename
+
 
 def test_hdf5_script(hdf5_example_file):
     example_events = 500
@@ -35,7 +37,7 @@ def test_hdf5_script(hdf5_example_file):
                 assert len(f[key]) == example_events
             else:
                 # check for correct waveform shape
-                #assert f['data'].shape == (example_events * example_channels,)
+                assert f['data'].shape == (example_events * example_channels,)
                 assert f['data'].dtype['voltage'].shape == (example_samples,)
 
         # check that we can match waveforms to events

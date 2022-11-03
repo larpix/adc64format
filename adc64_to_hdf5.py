@@ -41,7 +41,7 @@ WRITE_BUFFER = 1024-1
 
 dtypes = dtypes.copy()
 dtypes['data'] = dtypes['data'](nsamples)
-dtypes['ref'] = np.dtype([('start','i4'), ('stop','i4')])
+dtypes['ref'] = np.dtype([('start', 'i4'), ('stop', 'i4')])
 
 print(f'Opening input file {input_file}...', end=' ')
 with ADC64Reader(input_file) as reader:
@@ -85,14 +85,14 @@ with ADC64Reader(input_file) as reader:
                             write_ptr = ptr[key]
                             write_data = np.concatenate(data[key], axis=0).ravel()
 
-                            #print(key, 'write', write_data.shape, 'to', write_ptr)
+                            # print(key, 'write', write_data.shape, 'to', write_ptr)
                             fo[key].write_direct(write_data, dest_sel=np.s_[write_ptr-len(write_data):write_ptr])
-                            
+
                             data[key] = list()
 
                 if event is None:
                     break
-                
+
                 pbar.update()
 
         for key in dset_keys:
@@ -100,4 +100,3 @@ with ADC64Reader(input_file) as reader:
             print(f'"{key}" final shape of {ptr[key]}')
 
 print('Conversion complete!')
-

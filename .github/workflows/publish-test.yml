@@ -35,6 +35,6 @@ jobs:
         date +%Y%m%d.%H%M%S > VERSION
         cat VERSION
         
-        python -m build
+        python -m build -w -s
         python -m twine upload --repository testpypi dist/*
 

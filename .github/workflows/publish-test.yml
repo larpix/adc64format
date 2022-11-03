@@ -33,6 +33,8 @@ jobs:
       run: |
         # Fake a version number so that we can always upload to test-pypi
         date +%Y%m%d.%H%M%S > VERSION
+        cat VERSION
+        
         python -m build
         python -m twine upload --repository testpypi dist/*
 

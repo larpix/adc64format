@@ -24,9 +24,6 @@ dynamic = [
     "version"
 ]
 
-[project.scripts]
-adc64_to_hdf5 = "adc64_to_hdf5.py"
-
 [tool.setuptools.dynamic]
 version = {file = "VERSION"}
 readme = {file = "README.md"}

@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61.0", "numpy"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "adc64format"
+version = "0.0.0"
+authors = [
+  { name="Peter Madigan", email="pmadigan@berkeley.edu" },
+]
+description = "A python library to parse ADC64-formatted files"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]

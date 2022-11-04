@@ -15,12 +15,14 @@ except Exception as e:
 
 @pytest.fixture
 def hdf5_example_file(example_file, tmp_path):
-    output_filename = os.path.join(tmp_path, example_file + '.h5')
-    command = f'python adc64_to_hdf5.py 256 {example_file} {output_filename}'
+    output_filename = os.path.join(tmp_path, os.path.basename(example_file) + '.h5')
+    command = f'python adc64_to_hdf5.py {example_file} {output_filename}'
 
-    subprocess.run(command.split())
+    subprocess.run(command.split(), check=True)
 
-    return output_filename
+    yield output_filename
+
+    os.remove(output_filename)
 
 
 def test_hdf5_script(hdf5_example_file):

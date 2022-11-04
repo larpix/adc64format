@@ -1,2 +1,7 @@
 *.h5
 *.data
+*__pycache__*
+*.pyc
+*.egg-info
+build/*
+dist/*

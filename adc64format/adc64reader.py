@@ -12,7 +12,11 @@ dtypes = dict(
 
 
 def parse_header(f):
-    ''' Reads next block as a "header" block and advances file pointers'''
+    '''
+    Reads next block as a "header" block and advances stream position
+
+    :returns: tuple of new stream position, number of bytes read, numpy array
+    '''
     time_header = np.frombuffer(f.read(8), dtype='u4')
     unix_timestamp = np.frombuffer(f.read(8), dtype='u8')
 
@@ -21,11 +25,15 @@ def parse_header(f):
     arr['size'] = time_header[1]
     arr['unix'] = unix_timestamp
 
-    return arr
+    return f.seek(0, 1), 16, arr
 
 
 def parse_event(f):
-    ''' Reads next block as an "event" block '''
+    '''
+    Reads next block as an "event" block and advances stream position 
+
+    :returns: tuple of new stream position, number of bytes read, numpy array
+    '''
     event_payload = np.frombuffer(f.read(12), dtype='u4')
 
     arr = np.zeros((1,), dtype=dtypes['event'])
@@ -36,11 +44,15 @@ def parse_event(f):
     # check magic word
     assert hex(int(arr['event'])) == '0x2a502a50', f'Bad event word ({hex(int(arr["event"]))}), file corrupted?'
 
-    return arr
+    return f.seek(0, 1), 12, arr
 
 
 def parse_device(f):
-    ''' Reads next block as a "device" block '''
+    '''
+    Reads next block as a "device" block and advances stream position 
+
+    :returns: tuple of new stream position, number of bytes read, numpy array
+    '''
     device_serial_number = np.frombuffer(f.read(4), dtype='u4')
     device_payload_size = np.frombuffer(f.read(3)+b'\x00', dtype='u4')
     device_id = np.frombuffer(f.read(1), dtype='u1')
@@ -50,36 +62,41 @@ def parse_device(f):
     arr['id'] = device_id
     arr['size'] = device_payload_size
 
-    return arr
+    return f.seek(0, 1), 8, arr
 
 
 def parse_data(f, n=1):
-    ''' Reads next block(s) as a "data" blocks '''
-    arr_list = list()
+    '''
+    Reads next block(s) as a "data" blocks and advances stream position 
+
+    :returns: tuple of new stream position, number of bytes read, numpy array
+    '''
+
+    # peek at first block to determine output array shape
+    size = np.frombuffer(f.read(3)+b'\x00', dtype='u4') >> 2
+    f.seek(-3, 1)
+    nsamples = int(2 * (size - 2))
+    arr = np.zeros((n,), dtype=dtypes['data'](nsamples))
+    
+    nbytes = 0
     i = 0
-    while i < n:
-        size = np.frombuffer(f.read(3)+b'\x00', dtype='u4') >> 2
-        channel = np.frombuffer(f.read(1), dtype='u1')
+    for i in range(n):
+        arr[i]['size'] =  np.frombuffer(f.read(3)+b'\x00', dtype='u4') >> 2
+        arr[i]['channel'] = np.frombuffer(f.read(1), dtype='u1')
         f.seek(8, 1)
-        nsamples = int(2 * (size - 2))
-        wvfm = np.frombuffer(f.read(2 * nsamples), dtype='i2')
+        # waveform is indexed in a funny way, so we need to swap every other sample
+        arr[i]['voltage'] = np.frombuffer(f.read(2 * nsamples), dtype='i2').reshape(-1, 2)[:, ::-1].ravel()
+        nbytes += 12 + 2 * nsamples
 
-        arr = np.zeros((1,), dtype=dtypes['data'](nsamples))
-        arr['size'] = size
-        arr['channel'] = channel
-        arr['voltage'][0, 0::2] = wvfm[1::2]
-        arr['voltage'][0, 1::2] = wvfm[0::2]
-
-        arr_list.append(arr)
-        i += 1
-
-    arr = np.concatenate(arr_list)
-
-    return arr
+    return f.seek(0, 1), nbytes, arr
 
 
 def parse_time(f):
-    ''' Reads next block as a "time" block '''
+    '''
+    Reads next block as a "time" block and advances stream position 
+
+    :returns: tuple of new stream position, number of bytes read, numpy array
+    '''
     time_payload_size = np.frombuffer(f.read(4), dtype='u4') >> 2
     event_tai_s = np.frombuffer(f.read(4), dtype='u4')
     event_tai_ns = np.frombuffer(f.read(4), dtype='u4')
@@ -94,26 +111,37 @@ def parse_time(f):
     arr['flag'] = event_time_flag
     arr['bit_mask'] = bit_mask
 
-    return arr
+    return f.seek(0, 1), 20, arr
 
 
 def parse_chunk(f):
-    ''' Read next ADC64 chunk into numpy arrays and advance file pointers '''
+    '''
+    Read next ADC64 chunk into numpy arrays and advances stream position
+
+    :returns: tuple of new stream position, number of bytes read, dictionary of numpy arrays
+
+    '''
+    nbytes = 0
     # parse next header
-    header = parse_header(f)
+    _, nb, header = parse_header(f)
+    nbytes += nb
 
     # parse next event payload
-    event_payload = parse_event(f)
+    _, nb, event_payload = parse_event(f)
+    nbytes += nb
 
     # parse remaining block
-    device_payload = parse_device(f)
+    _, nb, device_payload = parse_device(f)
+    nbytes += nb
 
     # parse time block
-    time = parse_time(f)
+    _, nb, time = parse_time(f)
+    nbytes += nb
 
     # parse data block
     nblocks = bin(int(time['bit_mask'])).count('1')
-    data = parse_data(f, n=nblocks)
+    _, nb, data = parse_data(f, n=nblocks)
+    nbytes += nb
 
     # add to next chunk data
     chunk = dict()
@@ -123,27 +151,26 @@ def parse_chunk(f):
     chunk['time'] = time
     chunk['data'] = data
 
-    return chunk
+    return f.seek(0, 1), nbytes, chunk
+
+
+def chunk_size(f):
+    ''' Look ahead and get the next chunk size in bytes, does not advance forward in the stream '''
+    _, nbytes, _ = parse_chunk(f)    
+    f.seek(-nbytes, 1)
+    return nbytes
 
 
 def skip_chunks(f, nchunks):
-    ''' Skip either N chunks or to a specific position, assuming all chunks have the same number of channels and number of samples '''
+    '''
+    Skip N chunks, assuming all chunks have the same number of channels and number of samples
+
+    :returns: tuple of new stream position and the change in stream position
+    '''
     if nchunks == 0:
-        return
-    elif nchunks < 0:
-        raise ValueError(f'nchunks ({nchunks}) must be greater than zero')
-    test_chunk = parse_chunk(f)
-    nchannels, nsamples = test_chunk['data']['voltage'].shape
-
-    nbytes = (nchunks-1) * (
-        16  # header
-        + 12  # event payload
-        + 8  # device
-        + 20  # time
-        + (4+8+2*nsamples)*nchannels  # data
-    )
-
-    f.seek(nbytes, 1)
+        return f.seek(0, 1), 0
+    nbytes = chunk_size(f) * nchunks
+    return f.seek(nbytes, 1), nbytes
 
 
 class ADC64Reader(object):
@@ -154,13 +181,16 @@ class ADC64Reader(object):
 
         batch_size = 64
         with ADC64Reader(<filename>) as reader:
-            while (data := reader.next(batch_size)) is not None:
+            while data := reader.next(batch_size):
                 # do stuff with data
                 pass
 
-    Each iteration will return a dict with keys for each of the different
-    data blocks in the ADC64 format. The values at each of the keys will be
-    a list of the next ``batch_size`` chunks from the file.
+    Each iteration will return a list of length one, containing a dict with
+    keys for each of the different data blocks in the ADC64 format. The
+    values at each of the keys will be a list of the next ``batch_size``
+    chunks from the file.
+
+    When the end of the file is reached, ``next()`` will return ``None``.
 
     The class also supports reading and aligning multiple files by their
     timestamp::
@@ -168,12 +198,11 @@ class ADC64Reader(object):
         with ADC64Reader(<filename0>, <filename1>, ...) as reader:
             # set the tolerance for event matching
             reader.TIMESTAMP_WINDOW = 5
-            while (data := reader.next(batch_size)) is not None:
+            while data := reader.next(batch_size):
                 # do stuff with data
                 pass
 
-    In this case, each iteration will return a list of dicts, one per file.
-    Missing events will be represented in the dicts with a length 0 array.
+    In this case, missing/unmatched events will be represented in the dicts with a ``None``.
 
     '''
 
@@ -193,8 +222,8 @@ class ADC64Reader(object):
 
         self.filenames = filenames
         self.chunk = 0
-        self._fs = list()
-        self._nbytes = list()
+        self.streams = [None] * len(self.filenames)
+        self._nbytes = [-1] * len(self.filenames)
         self._next_event = [None] * len(self.filenames)
         self._last_sync = [np.zeros((1,), dtype=dtypes['time'][['tai_s', 'tai_ns']])] * len(self.filenames)
 
@@ -202,40 +231,48 @@ class ADC64Reader(object):
             print('Will load data from:', self.filenames)
 
     def open(self):
-        for file_ in self.filenames:
-            self._fs.append(open(file_, 'rb'))
-            self._nbytes.append(self._fs[-1].seek(0, 2))
-            self._fs[-1].seek(0)
+        for i,file_ in enumerate(self.filenames):
+            self.streams[i] = open(file_, 'rb')
+            self._nbytes[i] = self.streams[i].seek(0, 2)
+            self.streams[i].seek(0, 0)
             if self.VERBOSE:
-                print('File', file_, 'opened and contains', self._nbytes[-1], 'B')
+                print('File', file_, 'opened and contains', self._nbytes[i], 'B')
 
         return self
 
+    def reset(self):
+        ''' Return all stream positions to the start of their respective files '''
+        for i, f in enumerate(self.streams):
+            if f is None:
+                continue
+            f.seek(0, 0)
+            self._next_event[i] = None
+            self._last_sync[i] = np.zeros_like(self._last_sync[i])
+
     def close(self):
-        if self._fs:
-            for i in range(len(self.filenames)):
-                self._fs[i].close()
-            self._fs = list()
+        for i in range(len(self.filenames)):
+            self.streams[i].close()
+            self.streams[i] = None
+            self._last_sync[i][:] = 0
+            self._next_event[i] = None
 
-    def skip(self, nchunks):
-        ''' Skips forward in each file by a specified number of chunks assuming a constant number of samples and readout channels '''
-        assert len(self._fs), 'File(s) have not been opened yet!'
-
-        for f in self._fs:
+    def skip(self, nchunks, istream=None):
+        ''' Skips around in each file by a specified number of chunks assuming a constant number of samples and readout channels '''
+        for f in self.streams if istream is None else [self.streams[istream]]:
+            assert f is not None, 'File(s) have not been opened yet!'
             skip_chunks(f, nchunks)
-
 
     def next(self, n=1):
         # initialize return value list
-        return_value = [defaultdict(list) for _ in self._fs]
-        eof = [False] * len(self._fs)
+        return_value = [defaultdict(list) for _ in self.streams]
+        eof = [False] * len(self.streams)
 
         # mark the stop chunk
         stop_chunk = self.chunk + n
 
         while True:
             # loop over files
-            for i, (f, nbytes) in enumerate(zip(self._fs, self._nbytes)):
+            for i, (f, nbytes) in enumerate(zip(self.streams, self._nbytes)):
                 # check for end of file
                 if eof[i] or (f.seek(0, 1) >= nbytes):
                     if self.VERBOSE:
@@ -250,16 +287,18 @@ class ADC64Reader(object):
                     continue
 
                 # parse next file chunk
-                self._next_event[i] = parse_chunk(f)
+                _, _, self._next_event[i] = parse_chunk(f)
 
                 # tag sync events and reset timestamps
                 self._next_event[i] = self._apply_sync(i, self._next_event[i])
 
             # check if no available events
             if not all([ev is None for ev in self._next_event]):
-                tai = [int(ev['time']['tai_ns'] + 1e9*ev['time']['tai_s']) if ev is not None else np.inf for ev in self._next_event]
-                tai = [t if t != 0 else np.inf for t in tai]
-                ifirst_file = np.argmin(tai)
+                # always use valid entries
+                tai = [ev['time']['tai_ns'] + int(1e9) * ev['time']['tai_s'] if ev is not None else np.inf for ev in self._next_event]
+                # take sync events after all other entries, but before an invalid entry
+                tai = [t if t != 0 else np.iinfo(t.dtype).max for t in tai]
+                ifirst_file = int(np.argmin(tai))
                 event_unix = self._next_event[ifirst_file]['header']['unix']
                 event_tai_ns = self._next_event[ifirst_file]['time']['tai_ns']
             else:
@@ -293,8 +332,6 @@ class ADC64Reader(object):
             return None
 
         # return arrays
-        if len(self.filenames) == 1:
-            return return_value[0]
         return return_value
 
     def __enter__(self):

@@ -9,7 +9,7 @@ To install::
 
 To dump the contents of a single ADC64 file to an HDF5 format::
 
-    adc64_to_hdf5.py <number of samples> <input ADC64 file>.data <output HDF5 file>.h5
+    adc64_to_hdf5.py <input ADC64 file>.data <output HDF5 file>.h5
 
 To use interactively or within another python codebase::
 

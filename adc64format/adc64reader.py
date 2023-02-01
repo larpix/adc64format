@@ -295,9 +295,9 @@ class ADC64Reader(object):
             # check if no available events
             if not all([ev is None for ev in self._next_event]):
                 # always use valid entries
-                tai = [ev['time']['tai_ns'] + int(1e9) * ev['time']['tai_s'] if ev is not None else np.inf for ev in self._next_event]
+                tai = [ev['time']['tai_ns'] + int(1e9) * ev['time']['tai_s'] if ev is not None else np.array([np.inf]) for ev in self._next_event]
                 # take sync events after all other entries, but before an invalid entry
-                tai = [t if t != 0 else np.iinfo(t.dtype).max for t in tai]
+                tai = [t if t != 0 else np.array([np.iinfo(t.dtype).max]) for t in tai]
                 ifirst_file = int(np.argmin(tai))
                 event_unix = self._next_event[ifirst_file]['header']['unix']
                 event_tai_ns = self._next_event[ifirst_file]['time']['tai_ns']

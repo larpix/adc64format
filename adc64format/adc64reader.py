@@ -1,15 +1,55 @@
 import numpy as np
 from collections import defaultdict
 
+VERBOSE = False
+
 #: Key and array data types returned in each iteration
 dtypes = dict(
-    header=np.dtype([('header', 'u4'), ('size', 'u4'), ('unix', 'u8')]),
-    event=np.dtype([('event', 'u4'), ('size', 'u4'), ('serial', 'u4')]),
+    run_start=np.dtype([('run_nr', 'u4'), ('size', 'u4')]),
+    header=np.dtype([('sync', 'u4'), ('size', 'u4')]),
+    event=np.dtype([('event', 'u4'), ('n_dev', 'u4')]),
     device=np.dtype([('serial', 'u4'), ('id', 'u1'), ('size', 'u4')]),
     time=np.dtype([('size', 'u4'), ('tai_s', 'u4'), ('tai_ns', 'u4'), ('flag', 'u1'), ('bit_mask', 'u8')]),
     data=lambda nsamples: np.dtype([('channel', 'u1'), ('size', 'u4'), ('voltage', 'i2', (nsamples,))]),
 )
 
+def parse_run_start(f):
+    if VERBOSE:
+        print("Start_run_block")
+    
+    header = np.frombuffer(f.read(8), dtype='u4') #Read TLV header
+    assert hex(int(header[0])) == '0x72617453', 'Run start information not found.'
+    arr = np.zeros((1,), dtype=dtypes['run_start'])
+    size = header[1]
+    if VERBOSE:
+        print("   sync0: ",hex(int(header[0])))
+        print("   size0: ",int(size))
+    payload1 = np.frombuffer(f.read(12), dtype='u4') #Read Run number record
+    assert hex(int(payload1[0])) == '0x236e7552', 'Run number record not found'
+    arr['run_nr'] = payload1[2]
+    if VERBOSE:
+        print("   run_nr_size: ", payload1[1])
+        print("   Run number: ",payload1[2])
+
+    payload2 = np.frombuffer(f.read(8), dtype='u4') #Read Run index record header (only header!!)
+    assert hex(int(payload2[0])) == '0x78646e49', 'Run Index record not found'
+    if VERBOSE:
+        print("   sync3: ",hex(int(payload2[0])))
+        print("   size3: ",payload2[1])
+    if not payload2[1]:
+        print("   Run Index Record empty")
+    else:
+        payload3 = np.frombuffer(f.read(int(payload2[1])), dtype='u4') #Read Run index record payload
+        #for i in range(int(payload2[1])):
+    #    print("i=")
+    payload4 = np.frombuffer(f.read(8), dtype='u4')
+    if VERBOSE:
+        print("   pay4: ",hex(int(payload4[0])))
+        print("   size4: ", payload4[1])
+        print("   Dump JSON block")
+    np.frombuffer(f.read(int(payload4[1])), dtype='u4')
+
+    return f.seek(0,1), 36+int(payload2[1])+int(payload4[1]), arr
 
 def parse_header(f):
     '''
@@ -17,36 +57,60 @@ def parse_header(f):
 
     :returns: tuple of new stream position, number of bytes read, numpy array
     '''
-    time_header = np.frombuffer(f.read(8), dtype='u4')
-    unix_timestamp = np.frombuffer(f.read(8), dtype='u8')
+    header = np.frombuffer(f.read(8), dtype='u4')
+
+    if hex(int(header[0])) == '0x4e4f534a':
+        np.frombuffer(f.read(int(header[1])), dtype='u4') # Dump JSON
+        header = np.frombuffer(f.read(8), dtype='u4')
+
+    assert hex(int(header[0])) == '0x2a50d5af', 'Event header not found'
 
     arr = np.zeros((1,), dtype=dtypes['header'])
-    arr['header'] = time_header[0]
-    arr['size'] = time_header[1]
-    arr['unix'] = unix_timestamp
+    arr['sync'] = header[0]
+    arr['size'] = header[1]
 
-    return f.seek(0, 1), 16, arr
+    if VERBOSE:
+        print("Event header sync: ", hex(int(arr['sync'])))
+        print("Event size: ",arr['size'])
+
+    return f.seek(0, 1), 8, arr
 
 
-def parse_event(f):
+def parse_event(f,size):
     '''
     Reads next block as an "event" block and advances stream position 
 
     :returns: tuple of new stream position, number of bytes read, numpy array
     '''
-    event_payload = np.frombuffer(f.read(12), dtype='u4')
-
+    event_number = np.frombuffer(f.read(4), dtype='u4')
+    f.seek(0,1)
     arr = np.zeros((1,), dtype=dtypes['event'])
-    arr['event'] = event_payload[0]
-    arr['size'] = event_payload[1]
-    arr['serial'] = event_payload[2]
+    arr['event'] = int(event_number)
 
-    # check magic word
-    assert hex(int(arr['event'])) == '0x2a502a50', f'Bad event word ({hex(int(arr["event"]))}), file corrupted?'
+    if VERBOSE:
+        print("Event number: ", arr['event'])
 
-    return f.seek(0, 1), 12, arr
+    device_payload = []
+    time_payload = []
+    data_payload = []
+    nb_load = 4
 
+    while nb_load < size:
+        if VERBOSE:
+            print("start read device #",len(device_payload))
+        _,nb ,next_device, next_time, next_data  = parse_device(f)
+        nb_load += nb
+        device_payload.append(next_device)
+        time_payload.append(next_time)
+        data_payload.append(next_data)
+        if VERBOSE:
+            print("done read device #",len(device_payload)-1)
+    
+    arr["n_dev"] = len(device_payload)
 
+    return f.seek(0, 1), size, arr, device_payload, time_payload, data_payload
+
+    
 def parse_device(f):
     '''
     Reads next block as a "device" block and advances stream position 
@@ -56,13 +120,24 @@ def parse_device(f):
     device_serial_number = np.frombuffer(f.read(4), dtype='u4')
     device_payload_size = np.frombuffer(f.read(3)+b'\x00', dtype='u4')
     device_id = np.frombuffer(f.read(1), dtype='u1')
+    if VERBOSE:
+        print("   Dev serial: ",device_serial_number)
+        print("   Dev ID",hex(int(device_id)))
+        print("   Dev payload size", device_payload_size)
+    f.seek(0,1)
+    if VERBOSE:
+        print("   read time block")
+    _, time_nb, dev_time_payload = parse_time(f)
+    if VERBOSE:
+        print("   read data block")
+    _, data_nb, dev_data_payload = parse_data(f,bin(int(dev_time_payload['bit_mask'])).count('1'))
 
     arr = np.zeros((1,), dtype=dtypes['device'])
     arr['serial'] = device_serial_number
     arr['id'] = device_id
     arr['size'] = device_payload_size
 
-    return f.seek(0, 1), 8, arr
+    return f.seek(0, 1), 8 + int(device_payload_size), arr, dev_time_payload, dev_data_payload
 
 
 def parse_data(f, n=1):
@@ -73,7 +148,10 @@ def parse_data(f, n=1):
     '''
 
     # peek at first block to determine output array shape
-    size = np.frombuffer(f.read(3)+b'\x00', dtype='u4') >> 2
+    size = np.frombuffer(f.read(3)+b'\x00', dtype='u4')
+    subtype = size % 2
+    assert subtype==1, 'Expected data mstream, received different subtype'
+    size = size >> 2
     f.seek(-3, 1)
     nsamples = int(2 * (size - 2))
     arr = np.zeros((n,), dtype=dtypes['data'](nsamples))
@@ -87,7 +165,6 @@ def parse_data(f, n=1):
         # waveform is indexed in a funny way, so we need to swap every other sample
         arr[i]['voltage'] = np.frombuffer(f.read(2 * nsamples), dtype='i2').reshape(-1, 2)[:, ::-1].ravel()
         nbytes += 12 + 2 * nsamples
-
     return f.seek(0, 1), nbytes, arr
 
 
@@ -97,7 +174,10 @@ def parse_time(f):
 
     :returns: tuple of new stream position, number of bytes read, numpy array
     '''
-    time_payload_size = np.frombuffer(f.read(4), dtype='u4') >> 2
+    time_payload_size = np.frombuffer(f.read(4), dtype='u4')
+    subtype = time_payload_size % 2
+    assert subtype==0, 'Expected time mstream, received different subtype'
+    time_payload_size = time_payload_size >> 2
     event_tai_s = np.frombuffer(f.read(4), dtype='u4')
     event_tai_ns = np.frombuffer(f.read(4), dtype='u4')
     event_time_flag = event_tai_ns % 4
@@ -113,6 +193,37 @@ def parse_time(f):
 
     return f.seek(0, 1), 20, arr
 
+def parse_run_stop(f):
+    if VERBOSE:
+        print("Stop_run_block")
+    
+    header = np.frombuffer(f.read(8), dtype='u4') #Read TLV header
+    assert hex(int(header[0])) == '0x706f7453', 'Run stop information not found.'
+    arr = np.zeros((1,), dtype=dtypes['run_start'])
+    size = header[1]
+    if VERBOSE:
+        print("   sync0: ",hex(int(header[0])))
+        print("   size0: ",int(size))
+    payload1 = np.frombuffer(f.read(12), dtype='u4') #Read Run number record
+    assert hex(int(payload1[0])) == '0x236e7552', 'Run number record not found'
+    arr['run_nr'] = payload1[2]
+    if VERBOSE:
+        print("   run_nr_size: ", payload1[1])
+        print("   Run number: ",payload1[2])
+
+    payload2 = np.frombuffer(f.read(8), dtype='u4') #Read Run index record header (only header!!)
+    assert hex(int(payload2[0])) == '0x78646e49', 'Run Index record not found'
+    if VERBOSE:
+        print("   sync3: ",hex(int(payload2[0])))
+        print("   size3: ",payload2[1])
+    if not payload2[1]:
+        print("   Run Index Record empty")
+    else:
+        payload3 = np.frombuffer(f.read(int(payload2[1])), dtype='u4') #Read Run index record payload
+
+    return f.seek(0,1), 36+int(payload2[1]), arr
+
+
 
 def parse_chunk(f):
     '''
@@ -121,37 +232,73 @@ def parse_chunk(f):
     :returns: tuple of new stream position, number of bytes read, dictionary of numpy arrays
 
     '''
+    # parse next header
+    """ _, nb, header = parse_header(f)
+    nbytes += nb
+
+    if hex(int(header["sync"])) == '0x2A50D5AF':
+        if VERBOSE:
+            print("Event block")
+        _, nb, event, device, time, data = parse_event(f,header["size"])
+        #nbytes += nb
+            
+    elif hex(int(header["sync"])) == '0x72617453':
+        if VERBOSE:
+            print("Start_run_block")
+        _, nb, run_start_payload = parse_complex(f,'0x72617453',header["size"])
+        nbytes += nb
+        return parse_chunk(f)
+            
+    elif hex(int(header["sync"])) == '0x706F7453':
+        if VERBOSE:
+            print("Stop_run_block")
+        _, nb, run_stop_payload = parse_complex(f,'0x706F7453',header["size"])
+        nbytes += nb
+        return parse_chunk(f)
+    
+    elif hex(int(header["sync"])) == '0x67654246':
+        if VERBOSE:
+            print("Start_file_block")
+        _, nb, file_start_payload = parse_complex(f,'0x67654246',header["size"])
+        nbytes += nb
+        return parse_chunk(f)
+            
+    elif hex(int(header["sync"])) == '0x646E4546':
+        if VERBOSE:
+            print("Stop_file_block")
+        _, nb, file_stop_payload = parse_complex(f,'0x646E4546',header["size"])
+        nbytes += nb
+        return parse_chunk(f)
+    
+    elif hex(int(header["sync"])) == '0x4E4F534A':
+        if VERBOSE:
+            print("JSON_block")
+        return parse_chunk(f)
+        #_, nb, run_start_payload = parse_json()
+        #nbytes += nb
+             """
+
     nbytes = 0
     # parse next header
     _, nb, header = parse_header(f)
     nbytes += nb
 
     # parse next event payload
-    _, nb, event_payload = parse_event(f)
-    nbytes += nb
-
-    # parse remaining block
-    _, nb, device_payload = parse_device(f)
-    nbytes += nb
-
-    # parse time block
-    _, nb, time = parse_time(f)
-    nbytes += nb
-
-    # parse data block
-    nblocks = bin(int(time['bit_mask'])).count('1')
-    _, nb, data = parse_data(f, n=nblocks)
+    _, nb, event_payload, device_payload, time_payload, data_payload = parse_event(f,header["size"])
     nbytes += nb
 
     # add to next chunk data
     chunk = dict()
-    chunk['header'] = header
-    chunk['event'] = event_payload
-    chunk['device'] = device_payload
-    chunk['time'] = time
-    chunk['data'] = data
+    chunk['header'] = header   #array
+    chunk['event'] = event_payload  #array
+    chunk['device'] = device_payload #list of arrays
+    chunk['time'] = time_payload  #list of arrays
+    chunk['data'] = data_payload  #list of arrays
+    if VERBOSE:
+        print('event dataset shapes:\n' + '\n'.join([f'  {k}: {len(chunk[k])} ' for k in chunk.keys()]))
 
     return f.seek(0, 1), nbytes, chunk
+
 
 
 def chunk_size(f):
@@ -171,6 +318,16 @@ def skip_chunks(f, nchunks):
         return f.seek(0, 1), 0
     nbytes = chunk_size(f) * nchunks
     return f.seek(nbytes, 1), nbytes
+
+def check_eof(f):
+    ''' Look ahead and get the next chunk size in bytes, does not advance forward in the stream '''
+    header = np.frombuffer(f.read(8), dtype='u4')
+
+    if VERBOSE:
+        print("Event header sync: ", hex(int(header[0])))
+
+    f.seek(-8, 1)
+    return hex(int(header[0])) == '0x706f7453'
 
 
 class ADC64Reader(object):
@@ -206,10 +363,6 @@ class ADC64Reader(object):
 
     '''
 
-    #: Use this channel and threshold to synchronize multiple files
-    SYNC_CHANNEL = 32
-    SYNC_THRESHOLD = 1024
-
     #: allow events as long as they are synchronized to within this value
     UNIX_WINDOW = 100  # ms
     TAI_NS_WINDOW = 1000  # ticks
@@ -217,119 +370,109 @@ class ADC64Reader(object):
     #: flag to dump *all* data to terminal
     VERBOSE = False
 
-    def __init__(self, *filenames):
-        assert len(filenames) >= 1, 'At least one filename is needed'
+    def __init__(self, filename, nadc):
+        assert len(filename) >= 1, 'At least one filename is needed'
 
-        self.filenames = filenames
+        self.filename = filename
+        self.nadc = nadc
         self.chunk = 0
-        self.streams = [None] * len(self.filenames)
-        self._nbytes = [-1] * len(self.filenames)
-        self._next_event = [None] * len(self.filenames)
-        self._last_sync = [np.zeros((1,), dtype=dtypes['time'][['tai_s', 'tai_ns']])] * len(self.filenames)
+        self.stream = None
+        self.runinfo = None
+        self._nbyte = -1
+        self._next_event = None
+        self._last_sync = [np.zeros((1,), dtype=dtypes['time'][['tai_s', 'tai_ns']])] * self.nadc
 
         if self.VERBOSE:
-            print('Will load data from:', self.filenames)
+            print('Will load data from:', self.filename)
 
     def open(self):
-        for i,file_ in enumerate(self.filenames):
-            self.streams[i] = open(file_, 'rb')
-            self._nbytes[i] = self.streams[i].seek(0, 2)
-            self.streams[i].seek(0, 0)
-            if self.VERBOSE:
-                print('File', file_, 'opened and contains', self._nbytes[i], 'B')
-
+        self.stream = open(self.filename, 'rb')
+        self._nbyte = self.stream.seek(0, 2)
+        self.stream.seek(0, 0)
+        
+        if self.VERBOSE:
+            print('File', self.filename, 'opened and contains', self._nbyte, 'B')
+            print("Run number: ",self.runinfo["run_nr"])
         return self
 
     def reset(self):
         ''' Return all stream positions to the start of their respective files '''
-        for i, f in enumerate(self.streams):
-            if f is None:
-                continue
-            f.seek(0, 0)
-            self._next_event[i] = None
-            self._last_sync[i] = np.zeros_like(self._last_sync[i])
+        if self.stream is None:
+            exit()
+        self.stream.seek(0, 0)
+        self._next_event = None
+        self._last_sync = np.zeros_like(self._last_sync)
 
     def close(self):
-        for i in range(len(self.filenames)):
-            self.streams[i].close()
-            self.streams[i] = None
-            self._last_sync[i][:] = 0
-            self._next_event[i] = None
+        self.stream.close()
+        self.stream = None
+        for i in range(self.nadc):
+            self._last_sync[:] = 0
+            self._next_event = None
 
     def skip(self, nchunks, istream=None):
         ''' Skips around in each file by a specified number of chunks assuming a constant number of samples and readout channels '''
-        for f in self.streams if istream is None else [self.streams[istream]]:
-            assert f is not None, 'File(s) have not been opened yet!'
+        with self.streams as f:
+            assert f is not None, 'File have not been opened yet!'
             skip_chunks(f, nchunks)
 
     def next(self, n=1):
         # initialize return value list
-        return_value = [defaultdict(list) for _ in self.streams]
-        eof = [False] * len(self.streams)
+        return_value = defaultdict(list)
+        eof = check_eof(self.stream)
 
         # mark the stop chunk
         stop_chunk = self.chunk + n
-
+        
         while True:
-            # loop over files
-            for i, (f, nbytes) in enumerate(zip(self.streams, self._nbytes)):
-                # check for end of file
-                if eof[i] or (f.seek(0, 1) >= nbytes):
-                    if self.VERBOSE:
-                        print(f'*** EOF ({i}) ***')
-                    eof[i] = True
-                    continue
+            # loop over devices
+            # check for end of file
+            if eof or (self.stream.tell() >= self._nbyte):
+                if self.VERBOSE:
+                    print(f'*** EOF ***')
+                eof = True
+                return None
+            # check if chunk has already been loaded
+            if self._next_event is not None:
+                if self.VERBOSE:
+                    print(f'*** chunk already loaded ***')
+                continue
+            # parse next file chunk
+            _, _, self._next_event = parse_chunk(self.stream)
 
-                # check if chunk has already been loaded
-                if self._next_event[i] is not None:
-                    if self.VERBOSE:
-                        print(f'*** ({i}) chunk already loaded ***')
-                    continue
-
-                # parse next file chunk
-                _, _, self._next_event[i] = parse_chunk(f)
-
-                # tag sync events and reset timestamps
-                self._next_event[i] = self._apply_sync(i, self._next_event[i])
+            # tag sync events and reset timestamps
+            #self._next_event = self._apply_sync(self._next_event)
 
             # check if no available events
             if not all([ev is None for ev in self._next_event]):
                 # always use valid entries
-                tai = [ev['time']['tai_ns'] + int(1e9) * ev['time']['tai_s'] if ev is not None else np.array([np.inf]) for ev in self._next_event]
+                tai = [ev['tai_ns'] + int(1e9) * ev['tai_s'] if ev is not None else np.array([np.inf]) for ev in self._next_event["time"]]
                 # take sync events after all other entries, but before an invalid entry
                 tai = [t if t != 0 else np.array([np.iinfo(t.dtype).max]) for t in tai]
-                ifirst_file = int(np.argmin(tai))
-                event_unix = self._next_event[ifirst_file]['header']['unix']
-                event_tai_ns = self._next_event[ifirst_file]['time']['tai_ns']
+                ifirst_dev = int(np.argmin(tai))
+                event_tai_ns = self._next_event['time'][ifirst_dev]['tai_ns']
             else:
-                event_unix = 0
                 event_tai_ns = 0
             if self.VERBOSE:
-                print(f'Chunk {self.chunk} matching on timestamp:', event_unix, event_tai_ns)
+                print(f'Chunk {self.chunk} matching on timestamp:', event_tai_ns)
 
             # Move events from next to return data
-            for i, ev in enumerate(self._next_event):
-                if (
-                        ev is not None
-                        and (abs(event_unix - ev['header']['unix'].astype(int)) < self.UNIX_WINDOW)
-                        and (abs(event_tai_ns - ev['time']['tai_ns'].astype(int)) < self.TAI_NS_WINDOW)):
-                    for key in dtypes:
-                        return_value[i][key].append(ev[key])
-                    self._next_event[i] = None
-                else:
-                    for key in dtypes:
-                        return_value[i][key].append(None)
-
-            if self.VERBOSE:
-                print('Matched on files:', [i for i in range(len(self._next_event)) if return_value[i]['header'][-1] is not None])
+            if self._next_event is not None:
+                for key in dtypes:
+                    if key == 'run_start':
+                        continue
+                    return_value[key] = self._next_event[key]
+                    #print("Key: ",key," Len: ",len(return_value[key]))
+                self._next_event = None
+            else:
+                for key in dtypes:
+                    if key == 'run_start':
+                        continue
+                    return_value[key].append(None)
 
             self.chunk += 1
             if (self.chunk == stop_chunk) or all(eof):
                 break
-
-        # check for EOF across all files
-        if all(eof) and all([header is None for rv in return_value for header in rv['header']]):
-            return None
 
         # return arrays
         return return_value
@@ -339,28 +482,24 @@ class ADC64Reader(object):
         return self
 
     def __exit__(self, *args):
+        print("CLOSED")
         self.close()
 
-    def _apply_sync(self, ifile, event):
+    def _apply_sync(self, idev, event):
         is_sync = self._check_sync(event['data'])
 
         if is_sync:
-            self._last_sync[ifile] = event['time'][['tai_s', 'tai_ns']].copy()
+            self._last_sync[idev] = event['time'][['tai_s', 'tai_ns']].copy()
             event['time']['tai_s'] = 0
             event['time']['tai_ns'] = 0
         else:
             event['time']['tai_s'] = (
-                event['time']['tai_s'] - self._last_sync[ifile]['tai_s']
-                if event['time']['tai_ns'] > self._last_sync[ifile]['tai_ns']
-                else (event['time']['tai_s']-1) - self._last_sync[ifile]['tai_s'])
+                event['time']['tai_s'] - self._last_sync[idev]['tai_s']
+                if event['time']['tai_ns'] > self._last_sync[idev]['tai_ns']
+                else (event['time']['tai_s']-1) - self._last_sync[idev]['tai_s'])
             event['time']['tai_ns'] = (
-                event['time']['tai_ns'] - self._last_sync[ifile]['tai_ns']
-                if event['time']['tai_ns'] > self._last_sync[ifile]['tai_ns']
-                else (1e9+event['time']['tai_ns']) - self._last_sync[ifile]['tai_ns'])
+                event['time']['tai_ns'] - self._last_sync[idev]['tai_ns']
+                if event['time']['tai_ns'] > self._last_sync[idev]['tai_ns']
+                else (1e9+event['time']['tai_ns']) - self._last_sync[idev]['tai_ns'])
 
         return event
-
-    def _check_sync(self, data):
-        mask = data['channel'] == self.SYNC_CHANNEL
-        mask = data[mask]['voltage'] >= self.SYNC_THRESHOLD
-        return bool(np.any(mask))

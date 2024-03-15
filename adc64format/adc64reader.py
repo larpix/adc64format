@@ -284,7 +284,7 @@ def parse_chunk(f):
     nbytes += nb
 
     # parse next event payload
-    _, nb, event_payload, device_payload, time_payload, data_payload = parse_event(f,header["size"])
+    _, nb, event_payload, device_payload, time_payload, data_payload = parse_event(f,header["size"][0])
     nbytes += nb
 
     # add to next chunk data
@@ -418,20 +418,21 @@ class ADC64Reader(object):
 
     def next(self, n=1):
         # initialize return value list
-        return_value = defaultdict(list)
-        eof = check_eof(self.stream)
+        return_value = [defaultdict(list) for _ in range(n)]
+        
 
         # mark the stop chunk
         stop_chunk = self.chunk + n
         
-        while True:
+        for i in range(n):
+            eof = check_eof(self.stream)
             # loop over devices
             # check for end of file
             if eof or (self.stream.tell() >= self._nbyte):
                 if self.VERBOSE:
                     print(f'*** EOF ***')
                 eof = True
-                return None
+                break
             # check if chunk has already been loaded
             if self._next_event is not None:
                 if self.VERBOSE:
@@ -461,19 +462,19 @@ class ADC64Reader(object):
                 for key in dtypes:
                     if key == 'run_start':
                         continue
-                    return_value[key] = self._next_event[key]
+                    return_value[i][key] = self._next_event[key]
                     #print("Key: ",key," Len: ",len(return_value[key]))
                 self._next_event = None
             else:
                 for key in dtypes:
                     if key == 'run_start':
                         continue
-                    return_value[key].append(None)
+                    return_value[i][key] = None
 
             self.chunk += 1
-            if (self.chunk == stop_chunk) or all(eof):
+            if (self.chunk == stop_chunk) or eof:
+                #return_value = return_value[:i+1]
                 break
-
         # return arrays
         return return_value
 

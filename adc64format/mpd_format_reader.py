@@ -7,7 +7,7 @@ VERBOSE = False
 dtypes = dict(
     run_start=np.dtype([('run_nr', 'u4'), ('size', 'u4')]),
     header=np.dtype([('sync', 'u4'), ('size', 'u4')]),
-    event=np.dtype([('event', 'u4'), ('n_dev', 'u4')]),
+    event=np.dtype([('event', 'u4'), ('n_dev', 'u4'),('unix_ms', 'u8')]),
     device=np.dtype([('serial', 'u4'), ('id', 'u1'), ('size', 'u4')]),
     time=np.dtype([('size', 'u4'), ('tai_s', 'u4'), ('tai_ns', 'u4'), ('flag', 'u1'), ('bit_mask', 'u8')]),
     data=lambda nsamples: np.dtype([('channel', 'u1'), ('size', 'u4'), ('voltage', 'i2', (nsamples,))]),
@@ -18,13 +18,14 @@ def mpd_parse_run_start(f):
         print("Start_run_block")
     
     header = np.frombuffer(f.read(8), dtype='u4') #Read TLV header
-    assert hex(int(header[0])) == '0x72617453', 'Run start information not found.'
+    assert int(header[0]) in [0x72617453,0x67654246], 'Run/File start information not found.'
     arr = np.zeros((1,), dtype=dtypes['run_start'])
     size = header[1]
     if VERBOSE:
         print("   sync0: ",hex(int(header[0])))
         print("   size0: ",int(size))
     payload1 = np.frombuffer(f.read(12), dtype='u4') #Read Run number record
+
     assert hex(int(payload1[0])) == '0x236e7552', 'Run number record not found'
     arr['run_nr'] = payload1[2]
     if VERBOSE:
@@ -83,17 +84,20 @@ def mpd_parse_event(f,size):
     :returns: tuple of new stream position, number of bytes read, numpy array
     '''
     event_number = np.frombuffer(f.read(4), dtype='u4')
+    unix_ms = np.frombuffer(f.read(8), dtype='u8')
     f.seek(0,1)
     arr = np.zeros((1,), dtype=dtypes['event'])
     arr['event'] = int(event_number)
+    arr['unix_ms'] = int(unix_ms)
 
     if VERBOSE:
         print("Event number: ", arr['event'])
+        print("Unix MS: ", arr['unix_ms'])
 
     device_payload = []
     time_payload = []
     data_payload = []
-    nb_load = 4
+    nb_load = 12
 
     while nb_load < size:
         if VERBOSE:
@@ -282,7 +286,8 @@ def mpd_check_eof(f):
         print("Event header sync: ", hex(int(header[0])))
 
     f.seek(-8, 1)
-    return hex(int(header[0])) == '0x706f7453'
+
+    return int(header[0]) in [0x706f7453, 0x646e4546]
 
 
 class MPDReader(object):

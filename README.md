@@ -7,6 +7,25 @@ To install::
 
     pip install adc64format
 
+## mpd format (new)
+To use interactively or within another python codebase::
+
+    from adc64format import mpd_parse_chunk, mpd_parse_run_start, MPDReader
+
+    input_file = adc64format.MPDReader(input_filename,n_adcs)
+    input_file.open()
+
+    # Read run info
+    _, nbytes_runinfo, runinfo = adc64format.mpd_parse_run_start(input_file.stream)
+    # use the first file for the event reference
+    _, chunk_size, test_event = adc64format.mpd_parse_chunk(input_file.stream)
+    
+    events = input_file.next(batch_size)
+    print(events.keys())
+    
+
+## adc64 format (old)
+
 To dump the contents of a single ADC64 file to an HDF5 format::
 
     adc64_to_hdf5.py <input ADC64 file>.data <output HDF5 file>.h5

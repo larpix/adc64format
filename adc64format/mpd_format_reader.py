@@ -73,7 +73,6 @@ def mpd_parse_header(f):
     if VERBOSE:
         print("Event header sync: ", hex(int(arr['sync'])))
         print("Event size: ",arr['size'])
-
     return f.seek(0, 1), 8, arr
 
 
@@ -124,6 +123,14 @@ def mpd_parse_device(f):
     device_serial_number = np.frombuffer(f.read(4), dtype='u4')
     device_payload_size = np.frombuffer(f.read(3)+b'\x00', dtype='u4')
     device_id = np.frombuffer(f.read(1), dtype='u1')
+    if device_payload_size <=20:
+        if VERBOSE:
+            print("Device payload size too small: ",device_payload_size)
+            print("Device serial: ",device_serial_number)
+            print("Dump event")
+        _ = np.frombuffer(f.read(int(device_payload_size)), dtype='u4')
+        return f.seek(0,1), 8 + int(device_payload_size), None, None, None
+        
     if VERBOSE:
         print("   Dev serial: ",device_serial_number)
         print("   Dev ID",hex(int(device_id)))

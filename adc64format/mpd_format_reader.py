@@ -263,8 +263,7 @@ def mpd_parse_chunk(f):
     if VERBOSE:
         print('event dataset shapes:\n' + '\n'.join([f'  {k}: {len(chunk[k])} ' for k in chunk.keys()]))
 
-    return f.seek(0, 1), nbytes, chunk
-
+    return f.seek(0, 1), int(nbytes), chunk
 
 
 def mpd_chunk_size(f):
@@ -377,11 +376,10 @@ class MPDReader(object):
             self._last_sync[:] = 0
             self._next_event = None
 
-    def skip(self, nchunks, istream=None):
+    def skip(self, nchunks):
         ''' Skips around in each file by a specified number of chunks assuming a constant number of samples and readout channels '''
-        with self.streams as f:
-            assert f is not None, 'File have not been opened yet!'
-            mpd_skip_chunks(f, nchunks)
+        assert self.stream is not None, 'File have not been opened yet!'
+        mpd_skip_chunks(self.stream, nchunks)
 
     def next(self, n=1):
         # initialize return value list

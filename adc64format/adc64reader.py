@@ -42,7 +42,7 @@ def parse_event(f):
     arr['serial'] = event_payload[2]
 
     # check magic word
-    assert hex(int(arr['event'])) == '0x2a502a50', f'Bad event word ({hex(int(arr["event"]))}), file corrupted?'
+    assert hex(int(arr['event'][0])) == '0x2a502a50', f'Bad event word ({hex(int(arr["event"][0]))}), file corrupted?'
 
     return f.seek(0, 1), 12, arr
 
@@ -73,7 +73,7 @@ def parse_data(f, n=1):
     '''
 
     # peek at first block to determine output array shape
-    size = np.frombuffer(f.read(3)+b'\x00', dtype='u4') >> 2
+    size = np.frombuffer(f.read(3)+b'\x00', dtype='u4')[0] >> 2
     f.seek(-3, 1)
     nsamples = int(2 * (size - 2))
     arr = np.zeros((n,), dtype=dtypes['data'](nsamples))
@@ -81,8 +81,8 @@ def parse_data(f, n=1):
     nbytes = 0
     i = 0
     for i in range(n):
-        arr[i]['size'] =  np.frombuffer(f.read(3)+b'\x00', dtype='u4') >> 2
-        arr[i]['channel'] = np.frombuffer(f.read(1), dtype='u1')
+        arr[i]['size'] =  np.frombuffer(f.read(3)+b'\x00', dtype='u4')[0] >> 2
+        arr[i]['channel'] = np.frombuffer(f.read(1), dtype='u1')[0]
         f.seek(8, 1)
         # waveform is indexed in a funny way, so we need to swap every other sample
         arr[i]['voltage'] = np.frombuffer(f.read(2 * nsamples), dtype='i2').reshape(-1, 2)[:, ::-1].ravel()
@@ -139,7 +139,7 @@ def parse_chunk(f):
     nbytes += nb
 
     # parse data block
-    nblocks = bin(int(time['bit_mask'])).count('1')
+    nblocks = bin(int(time['bit_mask'][0])).count('1')
     _, nb, data = parse_data(f, n=nblocks)
     nbytes += nb
 

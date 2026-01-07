@@ -117,7 +117,7 @@ def test_sync_multi(example_files):
         events = reader.next(max_events)
 
         # calculate timestamps
-        timestamp = np.c_[[[int(entry['tai_s']*1e9 + entry['tai_ns'])
+        timestamp = np.c_[[[int(entry['tai_s'][0]*1e9 + entry['tai_ns'][0])
                             if entry is not None else -1
                             for entry in event['time']]
                            for event in events]]

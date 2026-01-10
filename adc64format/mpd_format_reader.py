@@ -86,8 +86,8 @@ def mpd_parse_event(f,size):
     unix_ms = np.frombuffer(f.read(8), dtype='u8')
     f.seek(0,1)
     arr = np.zeros((1,), dtype=dtypes['event'])
-    arr['event'] = int(event_number)
-    arr['unix_ms'] = int(unix_ms)
+    arr['event'] = int(event_number[0])
+    arr['unix_ms'] = int(unix_ms[0])
 
     if VERBOSE:
         print("Event number: ", arr['event'])
@@ -141,14 +141,14 @@ def mpd_parse_device(f):
     _, time_nb, dev_time_payload = mpd_parse_time(f)
     if VERBOSE:
         print("   read data block")
-    _, data_nb, dev_data_payload = mpd_parse_data(f,bin(int(dev_time_payload['bit_mask'])).count('1'))
+    _, data_nb, dev_data_payload = mpd_parse_data(f,bin(int(dev_time_payload['bit_mask'][0])).count('1'))
 
     arr = np.zeros((1,), dtype=dtypes['device'])
     arr['serial'] = device_serial_number
     arr['id'] = device_id
     arr['size'] = device_payload_size
 
-    return f.seek(0, 1), 8 + int(device_payload_size), arr, dev_time_payload, dev_data_payload
+    return f.seek(0, 1), 8 + int(device_payload_size[0]), arr, dev_time_payload, dev_data_payload
 
 
 def mpd_parse_data(f, n=1):
@@ -159,7 +159,7 @@ def mpd_parse_data(f, n=1):
     '''
 
     # peek at first block to determine output array shape
-    size = np.frombuffer(f.read(3)+b'\x00', dtype='u4')
+    size = np.frombuffer(f.read(3)+b'\x00', dtype='u4')[0]
     subtype = size % 2
     assert subtype==1, 'Expected data mstream, received different subtype'
     size = size >> 2
@@ -170,8 +170,8 @@ def mpd_parse_data(f, n=1):
     nbytes = 0
     i = 0
     for i in range(n):
-        arr[i]['size'] =  np.frombuffer(f.read(3)+b'\x00', dtype='u4') >> 2
-        arr[i]['channel'] = np.frombuffer(f.read(1), dtype='u1')
+        arr[i]['size'] =  np.frombuffer(f.read(3)+b'\x00', dtype='u4')[0] >> 2
+        arr[i]['channel'] = np.frombuffer(f.read(1), dtype='u1')[0]
         f.seek(8, 1)
         # waveform is indexed in a funny way, so we need to swap every other sample
         arr[i]['voltage'] = np.frombuffer(f.read(2 * nsamples), dtype='i2').reshape(-1, 2)[:, ::-1].ravel()
